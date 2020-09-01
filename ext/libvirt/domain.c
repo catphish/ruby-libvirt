@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <ruby.h>
+#include <ruby/thread.h>
 /* we need to include st.h since ruby 1.8 needs it for RHash */
 #include <st.h>
 #include <libvirt/libvirt.h>
@@ -125,6 +126,25 @@ static void domain_input_to_fixnum_and_flags(VALUE in, VALUE *hash, VALUE *flags
     }
 }
 
+struct params_wgvl_virDomainMigrate {
+    virDomainPtr domain;
+    virConnectPtr dconn;
+    unsigned long flags;
+    const char * dname;
+    const char * uri;
+    unsigned long bandwidth;
+};
+
+void * wgvl_virDomainMigrate(void * p) {
+    struct params_wgvl_virDomainMigrate * params = p;
+    return virDomainMigrate(params->domain,
+                            params->dconn,
+                            params->flags,
+                            params->dname,
+                            params->uri,
+                            params->bandwidth);
+}
+
 /*
  * call-seq:
  *   dom.migrate(dconn, flags=0, dname=nil, uri=nil, bandwidth=0) -> Libvirt::Domain
@@ -135,18 +155,21 @@ static void domain_input_to_fixnum_and_flags(VALUE in, VALUE *hash, VALUE *flags
  */
 static VALUE libvirt_domain_migrate(int argc, VALUE *argv, VALUE d)
 {
+    struct params_wgvl_virDomainMigrate params;
     VALUE dconn, flags, dname, uri, bandwidth;
     virDomainPtr ddom = NULL;
 
     rb_scan_args(argc, argv, "14", &dconn, &flags, &dname, &uri,
                  &bandwidth);
 
-    ddom = virDomainMigrate(ruby_libvirt_domain_get(d),
-                            ruby_libvirt_connect_get(dconn),
-                            ruby_libvirt_value_to_ulong(flags),
-                            ruby_libvirt_get_cstring_or_null(dname),
-                            ruby_libvirt_get_cstring_or_null(uri),
-                            ruby_libvirt_value_to_ulong(bandwidth));
+    params.domain    = ruby_libvirt_domain_get(d);
+    params.dconn     = ruby_libvirt_connect_get(dconn);
+    params.flags     = ruby_libvirt_value_to_ulong(flags);
+    params.dname     = ruby_libvirt_get_cstring_or_null(dname);
+    params.uri       = ruby_libvirt_get_cstring_or_null(uri);
+    params.bandwidth = ruby_libvirt_value_to_ulong(bandwidth);
+
+    ddom = rb_thread_call_without_gvl(wgvl_virDomainMigrate, &params, NULL, NULL);
 
     ruby_libvirt_raise_error_if(ddom == NULL, e_Error, "virDomainMigrate",
                                 ruby_libvirt_connect_get(d));
